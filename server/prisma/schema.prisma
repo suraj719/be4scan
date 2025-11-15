@@ -1,0 +1,46 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Scan {
+  id            String    @id @default(uuid())
+  name          String
+  type          String    // e.g., "nuclei", "zap", "nmap"
+  target        String
+  status        String    @default("queued") // queued, running, completed, failed
+  createdAt     DateTime  @default(now())
+  startedAt     DateTime?
+  finishedAt    DateTime?
+  findingsCount Int       @default(0)
+  artifactPath  String?   // Path to the artifact file
+  artifactHash  String?   // SHA-256 checksum
+  errorMessage  String?   // Error message if failed
+  findings      Finding[]
+
+  @@index([status])
+  @@index([createdAt])
+}
+
+model Finding {
+  id          String   @id @default(uuid())
+  scanId      String
+  scan        Scan     @relation(fields: [scanId], references: [id], onDelete: Cascade)
+  title       String
+  severity    String   // info, low, medium, high, critical
+  description String?
+  resource    String   // Target URL + matched path
+  evidencePath String? // Path to evidence file if any
+  createdAt   DateTime @default(now())
+
+  @@index([scanId])
+  @@index([severity])
+}
+
