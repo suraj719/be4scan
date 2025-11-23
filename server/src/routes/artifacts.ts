@@ -2,18 +2,27 @@ import { Router, Request, Response } from "express";
 import { readFile } from "fs/promises";
 import { join } from "path";
 import prisma from "../db/client";
+import { authenticate, AuthRequest } from "../middleware/auth";
 
 export const artifactRoutes = Router();
 
-// GET /api/artifacts/:scanId/nuclei.json - Download artifact file
+// GET /api/artifacts/:scanId/nuclei.json - Download artifact file (protected)
 artifactRoutes.get(
   "/:scanId/nuclei.json",
-  async (req: Request, res: Response) => {
+  authenticate,
+  async (req: AuthRequest, res: Response) => {
     try {
+      if (!req.userId) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
       const { scanId } = req.params;
 
-      const scan = await prisma.scan.findUnique({
-        where: { id: scanId },
+      const scan = await prisma.scan.findFirst({
+        where: {
+          id: scanId,
+          userId: req.userId, // Ensure user owns the scan
+        },
       });
 
       if (!scan) {

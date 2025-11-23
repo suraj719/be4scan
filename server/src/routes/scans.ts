@@ -1,6 +1,7 @@
 import { Router, Request, Response } from "express";
 import { z } from "zod";
 import prisma from "../db/client";
+import { authenticate, AuthRequest } from "../middleware/auth";
 
 export const scanRoutes = Router();
 
@@ -10,10 +11,14 @@ const createScanSchema = z.object({
   target: z.string().url(),
 });
 
-// POST /api/scans - Create a new scan
-scanRoutes.post("/", async (req: Request, res: Response) => {
+// POST /api/scans - Create a new scan (protected)
+scanRoutes.post("/", authenticate, async (req: AuthRequest, res: Response) => {
   try {
     const body = createScanSchema.parse(req.body);
+
+    if (!req.userId) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
 
     const scan = await prisma.scan.create({
       data: {
@@ -21,6 +26,7 @@ scanRoutes.post("/", async (req: Request, res: Response) => {
         type: body.type,
         target: body.target,
         status: "queued",
+        userId: req.userId,
       },
     });
 
@@ -36,10 +42,15 @@ scanRoutes.post("/", async (req: Request, res: Response) => {
   }
 });
 
-// GET /api/scans - List all scans
-scanRoutes.get("/", async (req: Request, res: Response) => {
+// GET /api/scans - List all scans for current user (protected)
+scanRoutes.get("/", authenticate, async (req: AuthRequest, res: Response) => {
   try {
+    if (!req.userId) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
     const scans = await prisma.scan.findMany({
+      where: { userId: req.userId },
       orderBy: { createdAt: "desc" },
       include: {
         _count: {
@@ -55,11 +66,18 @@ scanRoutes.get("/", async (req: Request, res: Response) => {
   }
 });
 
-// GET /api/scans/:id - Get a specific scan
-scanRoutes.get("/:id", async (req: Request, res: Response) => {
+// GET /api/scans/:id - Get a specific scan (protected)
+scanRoutes.get("/:id", authenticate, async (req: AuthRequest, res: Response) => {
   try {
-    const scan = await prisma.scan.findUnique({
-      where: { id: req.params.id },
+    if (!req.userId) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const scan = await prisma.scan.findFirst({
+      where: {
+        id: req.params.id,
+        userId: req.userId, // Ensure user owns the scan
+      },
       include: {
         _count: {
           select: { findings: true },

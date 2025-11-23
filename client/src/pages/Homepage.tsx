@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { useAppDispatch, useAppSelector } from "../store/hooks";
+import { logout } from "../store/slices/authSlice";
 
 const navLinks = [
   { label: "Capabilities", href: "#capabilities" },
@@ -86,6 +88,12 @@ const nextActions = [
 
 function HomePage() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const dispatch = useAppDispatch();
+  const { user } = useAppSelector((state) => state.auth);
+
+  const handleLogout = () => {
+    dispatch(logout());
+  };
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
@@ -112,12 +120,17 @@ function HomePage() {
                 {link.label}
               </a>
             ))}
-            <a
-              href="#next-steps"
-              className="rounded-full bg-teal-500 px-4 py-2 text-slate-950 transition hover:bg-teal-400"
-            >
-              Start Planning
-            </a>
+            <div className="flex items-center gap-4">
+              <span className="text-slate-400 text-sm">
+                {user?.name || user?.email}
+              </span>
+              <button
+                onClick={handleLogout}
+                className="rounded-full bg-slate-800 border border-slate-700 px-4 py-2 text-slate-200 transition hover:bg-slate-700"
+              >
+                Logout
+              </button>
+            </div>
           </nav>
         </div>
         {mobileMenuOpen && (
@@ -135,13 +148,20 @@ function HomePage() {
                 {link.label}
               </a>
             ))}
-            <a
-              href="#next-steps"
-              className="block rounded-md bg-teal-500 px-3 py-2 text-center text-slate-950 transition hover:bg-teal-400"
-              onClick={() => setMobileMenuOpen(false)}
-            >
-              Start Planning
-            </a>
+            <div className="space-y-2">
+              <div className="px-3 py-2 text-slate-400 text-sm">
+                {user?.name || user?.email}
+              </div>
+              <button
+                onClick={() => {
+                  handleLogout();
+                  setMobileMenuOpen(false);
+                }}
+                className="block w-full rounded-md bg-slate-800 border border-slate-700 px-3 py-2 text-center text-slate-200 transition hover:bg-slate-700"
+              >
+                Logout
+              </button>
+            </div>
           </nav>
         )}
       </header>

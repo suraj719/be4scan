@@ -16,6 +16,8 @@ model Scan {
   type          String    // e.g., "nuclei", "zap", "nmap"
   target        String
   status        String    @default("queued") // queued, running, completed, failed
+  userId        String
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   createdAt     DateTime  @default(now())
   startedAt     DateTime?
   finishedAt    DateTime?
@@ -27,6 +29,7 @@ model Scan {
 
   @@index([status])
   @@index([createdAt])
+  @@index([userId])
 }
 
 model Finding {
@@ -42,5 +45,17 @@ model Finding {
 
   @@index([scanId])
   @@index([severity])
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String   // Hashed password
+  name      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  scans     Scan[]
+
+  @@index([email])
 }
 
