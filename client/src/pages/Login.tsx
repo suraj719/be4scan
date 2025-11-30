@@ -22,7 +22,7 @@ export default function Login() {
     const result = await dispatch(loginUser({ email, password }));
 
     if (loginUser.fulfilled.match(result)) {
-      navigate("/");
+      navigate("/dashboard");
       toast.success("Logged in successfully");
     } else {
       toast.error(result.payload as string);

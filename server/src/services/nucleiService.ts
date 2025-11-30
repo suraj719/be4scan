@@ -137,10 +137,11 @@ export async function executeNucleiScan(
   try {
     // Create scan directory
     await mkdir(scanDir, { recursive: true });
+    // Initialize empty artifact file
+    await writeFile(outputPath, "");
 
     console.log(`[Nuclei] Starting scan for ${target} (scanId: ${scanId})`);
     console.log(`[Nuclei] Artifact directory: ${resolve(scanDir)}`);
-    console.log(`[Nuclei] Docker mount path: ${dockerMountPath}`);
 
     // Ensure Nuclei image is available
     await ensureNucleiImage();
@@ -151,16 +152,15 @@ export async function executeNucleiScan(
       Cmd: [
         "-u",
         target,
-        "-jsonl", // JSON Lines output format (one JSON object per line)
-        "-o",
-        "/output/nuclei.json",
+        "-jsonl", // JSON Lines output format
         "-timeout",
         "30", // 30 second timeout per request
         "-no-color",
-        "-silent", // Suppress banner and other non-essential output
+        "-silent", // Suppress banner
       ],
       HostConfig: {
-        // Use normalized absolute path for Docker bind mount (required, especially on Windows)
+        // We still mount the dir to ensure we can write to it if needed,
+        // though we are writing from Node.js side now.
         Binds: [`${dockerMountPath}:/output`],
         AutoRemove: true,
         Memory: 2 * 1024 * 1024 * 1024, // 2GB limit
@@ -168,12 +168,21 @@ export async function executeNucleiScan(
         CpuQuota: 50000, // 50% CPU
         CpuPeriod: 100000,
       },
+      Tty: false,
     };
 
-    // Create and start container
+    // Create container
     const container = await docker.createContainer(containerConfig);
-    await container.start();
 
+    // Attach to stream before starting to ensure we catch all output
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const stream = await (container as any).attach({
+      stream: true,
+      stdout: true,
+      stderr: true,
+    });
+
+    await container.start();
     console.log(`[Nuclei] Container started: ${container.id}`);
 
     // Set up timeout
@@ -182,24 +191,66 @@ export async function executeNucleiScan(
         console.log(
           `[Nuclei] Timeout reached, stopping container ${container.id}`
         );
-        await container.stop({ t: 10 }); // 10 second grace period
+        await container.stop({ t: 10 });
         await container.remove();
       } catch (error) {
         console.error(`[Nuclei] Error stopping timed-out container:`, error);
       }
     }, SCAN_TIMEOUT_MS);
 
-    // Stream logs
-    const logStream = await container.logs({
-      follow: true,
-      stdout: true,
-      stderr: true,
-    });
+    // Process stream
+    let buffer = "";
+    let findingsCount = 0;
 
-    logStream.on("data", (chunk: Buffer) => {
-      const logLine = chunk.toString("utf-8").trim();
-      if (logLine) {
-        console.log(`[Nuclei] ${logLine}`);
+    stream.on("data", async (chunk: Buffer) => {
+      buffer += chunk.toString("utf-8");
+
+      const lines = buffer.split("\n");
+      // Keep the last partial line in buffer
+      buffer = lines.pop() || "";
+
+      for (const line of lines) {
+        const trimmedLine = line.trim();
+        // Skip Docker headers or empty lines (Docker headers often result in weird chars at start)
+        // A simple heuristic: JSON starts with {
+        const jsonStartIndex = trimmedLine.indexOf("{");
+        if (jsonStartIndex === -1) continue;
+
+        const potentialJson = trimmedLine.substring(jsonStartIndex);
+
+        try {
+          const finding: NucleiFinding = JSON.parse(potentialJson);
+
+          findingsCount++;
+
+          await require("fs/promises").appendFile(
+            outputPath,
+            JSON.stringify(finding) + "\n"
+          );
+
+          const info = finding.info || {};
+          const severity = mapNucleiSeverity(info.severity || "info");
+          const title = info.name || info.id || "Unknown Finding";
+          const description = info.description || finding.matched || "";
+          const resource = finding.host
+            ? `${finding.host}${finding.path || ""}`
+            : target;
+
+          await prisma.finding.create({
+            data: {
+              scanId,
+              title,
+              severity,
+              description,
+              resource,
+              evidencePath: outputPath,
+            },
+          });
+
+          console.log(`[Nuclei] New finding: ${title} (${severity})`);
+        } catch (e) {
+          // Not a valid JSON or not a finding, ignore
+        }
       }
     });
 
@@ -219,126 +270,34 @@ export async function executeNucleiScan(
     clearTimeout(timeoutId);
     console.log(`[Nuclei] Container exited with code ${exitCode}`);
 
-    // Read and parse results
-    let findings: NucleiFinding[] = [];
-    let outputFileExists = false;
-
-    try {
-      const outputContent = await readFile(outputPath, "utf-8");
-      outputFileExists = true;
-      const lines = outputContent
-        .trim()
-        .split("\n")
-        .filter((line) => line.trim());
-
-      if (lines.length > 0) {
-        findings = lines
-          .map((line) => {
-            try {
-              return JSON.parse(line);
-            } catch (parseLineError) {
-              console.warn(
-                `[Nuclei] Skipping invalid JSON line: ${line.substring(
-                  0,
-                  100
-                )}...`
-              );
-              return null;
-            }
-          })
-          .filter((finding) => finding !== null) as NucleiFinding[];
-      }
-
-      console.log(`[Nuclei] Parsed ${findings.length} findings from output`);
-    } catch (readError: any) {
-      if (readError.code === "ENOENT") {
-        console.warn(
-          `[Nuclei] Output file not found (container may have failed or produced no output)`
-        );
-        if (exitCode !== 0) {
-          console.warn(
-            `[Nuclei] Container exited with error code ${exitCode} - scan may have failed`
-          );
-        }
-      } else {
-        console.warn(`[Nuclei] Could not read output file:`, readError);
-      }
-      // Continue even if no findings - scan may have completed successfully with no vulnerabilities
-    }
-
-    // Compute SHA-256 checksum (only if file exists)
+    // Finalize scan
     let artifactHash: string | null = null;
-    if (outputFileExists) {
-      try {
-        const fileContent = await readFile(outputPath, "utf-8");
+    try {
+      const fileContent = await readFile(outputPath, "utf-8");
+      if (fileContent) {
         artifactHash = createHash("sha256").update(fileContent).digest("hex");
-        console.log(
-          `[Nuclei] Computed artifact hash: ${artifactHash.substring(0, 16)}...`
-        );
-      } catch (hashError) {
-        console.error(`[Nuclei] Error computing checksum:`, hashError);
       }
+    } catch (e) {
+      console.warn("[Nuclei] Could not read artifact for hashing");
     }
 
-    // Map Nuclei findings to database Finding records
-    const findingRecords = findings.map((finding) => {
-      const info = finding.info || {};
-      const severity = mapNucleiSeverity(info.severity || "info");
-      const title = info.name || info.id || "Unknown Finding";
-      const description = info.description || finding.matched || "";
-      const resource = finding.host
-        ? `${finding.host}${finding.path || ""}`
-        : target;
-
-      return {
-        scanId,
-        title,
-        severity,
-        description,
-        resource,
-        evidencePath: outputPath, // Reference to the full JSON file
-      };
+    await prisma.scan.update({
+      where: { id: scanId },
+      data: {
+        status: exitCode === 0 ? "completed" : "failed",
+        finishedAt: new Date(),
+        findingsCount,
+        artifactPath: outputPath,
+        artifactHash,
+        errorMessage:
+          exitCode !== 0 ? `Container exited with code ${exitCode}` : null,
+      },
     });
 
-    // Insert findings in a transaction
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await prisma.$transaction(async (tx: any) => {
-      // Delete existing findings for this scan (in case of re-run)
-      await tx.finding.deleteMany({ where: { scanId } });
-
-      // Insert new findings
-      if (findingRecords.length > 0) {
-        await tx.finding.createMany({ data: findingRecords });
-      }
-
-      // Update scan status
-      await tx.scan.update({
-        where: { id: scanId },
-        data: {
-          status: exitCode === 0 && outputFileExists ? "completed" : "failed",
-          finishedAt: new Date(),
-          findingsCount: findingRecords.length,
-          artifactPath: outputFileExists ? outputPath : null,
-          artifactHash,
-          errorMessage:
-            exitCode !== 0
-              ? `Container exited with code ${exitCode}${
-                  !outputFileExists ? " (no output file generated)" : ""
-                }`
-              : !outputFileExists
-              ? "Scan completed but no output file was generated"
-              : null,
-        },
-      });
-    });
-
-    console.log(
-      `[Nuclei] Scan completed: ${findingRecords.length} findings saved`
-    );
+    console.log(`[Nuclei] Scan completed: ${findingsCount} findings processed`);
   } catch (error) {
     console.error(`[Nuclei] Error executing scan:`, error);
 
-    // Update scan status to failed
     await prisma.scan.update({
       where: { id: scanId },
       data: {

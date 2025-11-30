@@ -25,7 +25,7 @@ export default function Register() {
     );
 
     if (registerUser.fulfilled.match(result)) {
-      navigate("/");
+      navigate("/dashboard");
       toast.success("Account created successfully");
     } else {
       toast.error(result.payload as string);

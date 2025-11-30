@@ -6,6 +6,28 @@ export interface User {
   name?: string;
 }
 
+export interface Scan {
+  id: string;
+  name: string;
+  type: string;
+  target: string;
+  status: "queued" | "running" | "completed" | "failed";
+  createdAt: string;
+  startedAt?: string;
+  finishedAt?: string;
+  findingsCount: number;
+  errorMessage?: string;
+}
+
+export interface Finding {
+  id: string;
+  title: string;
+  severity: "info" | "low" | "medium" | "high" | "critical";
+  description?: string;
+  resource: string;
+  createdAt: string;
+}
+
 export interface AuthResponse {
   user: User;
   token: string;
@@ -83,24 +105,40 @@ class ApiClient {
   }
 
   // Scan endpoints
-  async createScan(name: string, type: string, target: string) {
-    return this.request("/api/scans", {
+  async createScan(name: string, type: string, target: string): Promise<Scan> {
+    return this.request<Scan>("/api/scans", {
       method: "POST",
       body: JSON.stringify({ name, type, target }),
     });
   }
 
-  async getScans() {
-    return this.request("/api/scans");
+  async getScans(): Promise<Scan[]> {
+    return this.request<Scan[]>("/api/scans");
   }
 
-  async getScan(id: string) {
-    return this.request(`/api/scans/${id}`);
+  async getScan(id: string): Promise<Scan> {
+    return this.request<Scan>(`/api/scans/${id}`);
   }
 
   // Finding endpoints
-  async getFindings(scanId: string) {
-    return this.request(`/api/findings?scanId=${scanId}`);
+  async getFindings(scanId: string): Promise<Finding[]> {
+    return this.request<Finding[]>(`/api/findings?scanId=${scanId}`);
+  }
+
+  // Artifact download
+  getArtifactUrl(scanId: string): string {
+    return `${this.baseUrl}/api/artifacts/${scanId}/nuclei.json`;
+  }
+
+  async downloadArtifact(scanId: string): Promise<Blob> {
+    const url = this.getArtifactUrl(scanId);
+    const headers: Record<string, string> = {};
+    if (this.token) {
+      headers["Authorization"] = `Bearer ${this.token}`;
+    }
+    const response = await fetch(url, { headers });
+    if (!response.ok) throw new Error("Failed to download artifact");
+    return response.blob();
   }
 }
 

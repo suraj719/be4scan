@@ -6,6 +6,10 @@ import { fetchCurrentUser } from "./store/slices/authSlice";
 import HomePage from "./pages/Homepage";
 import Login from "./pages/Login";
 import Register from "./pages/Register";
+import DashboardLayout from "./components/DashboardLayout";
+import Dashboard from "./pages/Dashboard";
+import ScansPage from "./pages/ScansPage";
+import ScanDetailsPage from "./pages/ScanDetailsPage";
 
 function ProtectedRoute({ children }: { children: ReactNode }) {
   const dispatch = useAppDispatch();
@@ -18,7 +22,7 @@ function ProtectedRoute({ children }: { children: ReactNode }) {
     }
   }, [dispatch, token, user, loading]);
 
-  if (loading) {
+  if (loading || (token && !user)) {
     return (
       <div className="min-h-screen bg-slate-950 flex items-center justify-center">
         <div className="text-slate-400">Loading...</div>
@@ -36,7 +40,9 @@ function ProtectedRoute({ children }: { children: ReactNode }) {
 function PublicRoute({ children }: { children: ReactNode }) {
   const { user, token, loading } = useAppSelector((state) => state.auth);
 
-  if (loading) {
+  // Only show full-page loader if we are verifying an existing session (token exists)
+  // If no token, we are likely logging in/registering, so let the form handle the loading state
+  if (loading && token) {
     return (
       <div className="min-h-screen bg-slate-950 flex items-center justify-center">
         <div className="text-slate-400">Loading...</div>
@@ -45,7 +51,7 @@ function PublicRoute({ children }: { children: ReactNode }) {
   }
 
   if (user && token) {
-    return <Navigate to="/" replace />;
+    return <Navigate to="/dashboard" replace />;
   }
 
   return <>{children}</>;
@@ -88,6 +94,18 @@ function AppRoutes() {
           </ProtectedRoute>
         }
       />
+      <Route
+        path="/dashboard"
+        element={
+          <ProtectedRoute>
+            <DashboardLayout />
+          </ProtectedRoute>
+        }
+      >
+        <Route index element={<Dashboard />} />
+        <Route path="scans" element={<ScansPage />} />
+        <Route path="scans/:id" element={<ScanDetailsPage />} />
+      </Route>
     </Routes>
   );
 }
